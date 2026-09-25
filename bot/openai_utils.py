@@ -250,7 +250,9 @@ class ChatGPT:
         return base64.b64encode(image_buffer.read()).decode("utf-8")
 
     def _generate_prompt_messages(self, message, dialog_messages, chat_mode, image_buffer: BytesIO = None):
-        prompt = config.chat_modes[chat_mode]["prompt_start"]
+        prompt = config.chat_modes[chat_mode].get("prompt_start", "") or ""
+        # always answer in Russian, regardless of the mode's prompt or input language
+        prompt = (prompt + "\n\nВсегда отвечай пользователю на русском языке, вне зависимости от языка сообщения.").strip()
 
         messages = [{"role": "system", "content": prompt}]
 

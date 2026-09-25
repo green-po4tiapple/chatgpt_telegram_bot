@@ -46,6 +46,7 @@ HELP_MESSAGE = """Commands:
 ⚪ /retry – Regenerate last bot answer
 ⚪ /new – Start new dialog
 ⚪ /chats – Show & switch past dialogs
+⚪ /imagine &lt;prompt&gt; – Generate an image from any mode
 ⚪ /mode – Select chat mode
 ⚪ /settings – Show settings
 ⚪ /balance – Show balance
@@ -581,6 +582,19 @@ async def generate_image_handle(update: Update, context: CallbackContext, messag
     for image in images:
         await update.message.chat.send_action(action="upload_photo")
         await update.message.reply_photo(io.BytesIO(image))
+
+
+async def imagine_handle(update: Update, context: CallbackContext):
+    # generate an image from any chat mode (unlike the artist-mode-only path)
+    prompt = " ".join(context.args).strip() if context.args else ""
+    if not prompt:
+        await update.message.reply_text(
+            "Использование: <code>/imagine текст запроса</code>\n"
+            "Например: <code>/imagine рыжий кот на Таймс-сквер, иллюстрация</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await generate_image_handle(update, context, message=prompt)
 
 
 async def new_dialog_handle(update: Update, context: CallbackContext):
@@ -1158,6 +1172,7 @@ async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("/new", "Start new dialog"),
         BotCommand("/chats", "Show & switch past dialogs"),
+        BotCommand("/imagine", "Generate an image from a prompt"),
         BotCommand("/mode", "Select chat mode"),
         BotCommand("/retry", "Re-generate response for previous query"),
         BotCommand("/balance", "Show balance"),
@@ -1201,6 +1216,8 @@ def run_bot() -> None:
     application.add_handler(CallbackQueryHandler(set_dialog_handle, pattern="^set_dialog"))
 
     application.add_handler(MessageHandler(filters.VOICE & user_filter, voice_message_handle))
+
+    application.add_handler(CommandHandler("imagine", imagine_handle, filters=user_filter))
 
     application.add_handler(CommandHandler("mode", show_chat_modes_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(show_chat_modes_callback_handle, pattern="^show_chat_modes"))
