@@ -43,6 +43,7 @@ user_tasks = {}
 HELP_MESSAGE = """Commands:
 ⚪ /retry – Regenerate last bot answer
 ⚪ /new – Start new dialog
+⚪ /chats – Show & switch past dialogs
 ⚪ /mode – Select chat mode
 ⚪ /settings – Show settings
 ⚪ /balance – Show balance
@@ -705,6 +706,18 @@ def get_settings_menu(user_id: int):
         )
 
     keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+
+    # "recent messages to reprint on dialog switch" selector
+    current_n = _get_show_last_n(user_id)
+    text += "\n\nOn <b>/chats</b> switch, reprint last messages:"
+    n_buttons = []
+    for n in LAST_N_OPTIONS:
+        title = "Off" if n == 0 else str(n)
+        if n == current_n:
+            title = "✅ " + title
+        n_buttons.append(InlineKeyboardButton(title, callback_data=f"set_lastn|{n}"))
+    keyboard.append(n_buttons)
+
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     return text, reply_markup
@@ -738,6 +751,179 @@ async def set_settings_handle(update: Update, context: CallbackContext):
     except telegram.error.BadRequest as e:
         if str(e).startswith("Message is not modified"):
             pass
+
+
+async def set_show_last_n_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.callback_query, context, update.callback_query.from_user)
+    user_id = update.callback_query.from_user.id
+
+    query = update.callback_query
+    await query.answer()
+
+    n = int(query.data.split("|")[1])
+    if n not in LAST_N_OPTIONS:
+        return
+    db.set_user_attribute(user_id, "show_last_n_on_switch", n)
+
+    text, reply_markup = get_settings_menu(user_id)
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    except telegram.error.BadRequest as e:
+        if str(e).startswith("Message is not modified"):
+            pass
+
+
+DIALOGS_PER_PAGE = 5
+DEFAULT_SHOW_LAST_N = 3
+LAST_N_OPTIONS = [0, 3, 5, 10]
+
+
+def _get_show_last_n(user_id: int) -> int:
+    n = db.get_user_attribute(user_id, "show_last_n_on_switch")
+    return DEFAULT_SHOW_LAST_N if n is None else int(n)
+
+
+def _dialog_label(dialog: dict) -> str:
+    start_time = dialog.get("start_time")
+    dt_str = start_time.strftime("%d.%m %H:%M") if start_time else "?"
+
+    model_key = dialog.get("model", "?")
+    model_name = config.models["info"].get(model_key, {}).get("name", model_key)
+
+    messages = dialog.get("messages", [])
+    snippet = ""
+    if messages:
+        try:
+            snippet = messages[0]["user"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            snippet = ""
+    snippet = (snippet or "…").replace("\n", " ").strip()
+    if len(snippet) > 25:
+        snippet = snippet[:25] + "…"
+
+    return f"{dt_str} · {model_name} · {snippet} ({len(messages)})"
+
+
+def get_dialogs_menu(user_id: int, page_index: int):
+    # skip empty dialogs (created by /new or model switches) — nothing to switch to
+    dialogs = [d for d in db.get_dialogs(user_id, limit=200) if d.get("messages")]
+    current_dialog_id = db.get_user_attribute(user_id, "current_dialog_id")
+
+    if not dialogs:
+        return "You have no dialogs with messages yet.", None
+
+    text = f"Your dialogs ({len(dialogs)}). Tap one to switch context:"
+
+    page_dialogs = dialogs[page_index * DIALOGS_PER_PAGE:(page_index + 1) * DIALOGS_PER_PAGE]
+
+    keyboard = []
+    for dialog in page_dialogs:
+        label = _dialog_label(dialog)
+        if dialog["_id"] == current_dialog_id:
+            label = "✅ " + label
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"set_dialog|{dialog['_id']}")])
+
+    # pagination
+    if len(dialogs) > DIALOGS_PER_PAGE:
+        is_first_page = (page_index == 0)
+        is_last_page = ((page_index + 1) * DIALOGS_PER_PAGE >= len(dialogs))
+
+        if is_first_page:
+            keyboard.append([
+                InlineKeyboardButton("»", callback_data=f"show_dialogs|{page_index + 1}")
+            ])
+        elif is_last_page:
+            keyboard.append([
+                InlineKeyboardButton("«", callback_data=f"show_dialogs|{page_index - 1}"),
+            ])
+        else:
+            keyboard.append([
+                InlineKeyboardButton("«", callback_data=f"show_dialogs|{page_index - 1}"),
+                InlineKeyboardButton("»", callback_data=f"show_dialogs|{page_index + 1}")
+            ])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def show_dialogs_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    if await is_previous_message_not_answered_yet(update, context): return
+
+    user_id = update.message.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    text, reply_markup = get_dialogs_menu(user_id, 0)
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def show_dialogs_callback_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.callback_query, context, update.callback_query.from_user)
+    if await is_previous_message_not_answered_yet(update.callback_query, context): return
+
+    user_id = update.callback_query.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    query = update.callback_query
+    await query.answer()
+
+    page_index = int(query.data.split("|")[1])
+    if page_index < 0:
+        return
+
+    text, reply_markup = get_dialogs_menu(user_id, page_index)
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    except telegram.error.BadRequest as e:
+        if str(e).startswith("Message is not modified"):
+            pass
+
+
+async def set_dialog_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.callback_query, context, update.callback_query.from_user)
+    user_id = update.callback_query.from_user.id
+
+    query = update.callback_query
+    await query.answer()
+
+    dialog_id = query.data.split("|", 1)[1]
+
+    dialogs = {d["_id"]: d for d in db.get_dialogs(user_id, limit=1000)}
+    dialog = dialogs.get(dialog_id)
+    if dialog is None:
+        await context.bot.send_message(query.message.chat.id, "Dialog not found.")
+        return
+
+    db.set_user_attribute(user_id, "current_dialog_id", dialog_id)
+
+    start_time = dialog.get("start_time")
+    dt_str = start_time.strftime("%d.%m %H:%M") if start_time else "?"
+    model_key = dialog.get("model", "?")
+    model_name = config.models["info"].get(model_key, {}).get("name", model_key)
+    await context.bot.send_message(
+        query.message.chat.id,
+        f"🔀 <b>Switched to dialog</b> {dt_str} · {model_name}",
+        parse_mode=ParseMode.HTML,
+    )
+
+    show_last_n = _get_show_last_n(user_id)
+    if show_last_n <= 0:
+        return
+
+    recent = dialog.get("messages", [])[-show_last_n:]
+    if not recent:
+        await context.bot.send_message(query.message.chat.id, "(this dialog is empty)")
+        return
+
+    for message in recent:
+        try:
+            user_text = message["user"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            user_text = "…"
+        bot_text = message.get("bot", "") or ""
+        # plain text (no parse_mode) so special chars in history never break sending
+        await context.bot.send_message(query.message.chat.id, f"👤 {user_text}"[:4000])
+        if bot_text:
+            await context.bot.send_message(query.message.chat.id, f"🤖 {bot_text}"[:4000])
 
 
 async def show_balance_handle(update: Update, context: CallbackContext):
@@ -826,6 +1012,7 @@ async def error_handle(update: Update, context: CallbackContext) -> None:
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("/new", "Start new dialog"),
+        BotCommand("/chats", "Show & switch past dialogs"),
         BotCommand("/mode", "Select chat mode"),
         BotCommand("/retry", "Re-generate response for previous query"),
         BotCommand("/balance", "Show balance"),
@@ -866,6 +1053,10 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("new", new_dialog_handle, filters=user_filter))
     application.add_handler(CommandHandler("cancel", cancel_handle, filters=user_filter))
 
+    application.add_handler(CommandHandler("chats", show_dialogs_handle, filters=user_filter))
+    application.add_handler(CallbackQueryHandler(show_dialogs_callback_handle, pattern="^show_dialogs"))
+    application.add_handler(CallbackQueryHandler(set_dialog_handle, pattern="^set_dialog"))
+
     application.add_handler(MessageHandler(filters.VOICE & user_filter, voice_message_handle))
 
     application.add_handler(CommandHandler("mode", show_chat_modes_handle, filters=user_filter))
@@ -874,6 +1065,7 @@ def run_bot() -> None:
 
     application.add_handler(CommandHandler("settings", settings_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(set_settings_handle, pattern="^set_settings"))
+    application.add_handler(CallbackQueryHandler(set_show_last_n_handle, pattern="^set_lastn"))
 
     application.add_handler(CommandHandler("balance", show_balance_handle, filters=user_filter))
 

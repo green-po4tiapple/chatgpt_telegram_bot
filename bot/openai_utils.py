@@ -47,6 +47,19 @@ OPENAI_COMPLETION_OPTIONS = {
 }
 
 
+def _completion_options(model):
+    # Anthropic OpenAI-compat (Claude 5) rejects sampling params -> strip them
+    provider = config.models["info"].get(model, {}).get("provider", "openai")
+    opts = dict(OPENAI_COMPLETION_OPTIONS)
+    if provider == "openrouter":
+        for k in ("temperature", "top_p", "frequency_penalty", "presence_penalty"):
+            opts.pop(k, None)
+        # Claude 5 thinking is on by default -> needs room and time
+        opts["max_tokens"] = 4096
+        opts["timeout"] = 180.0
+    return opts
+
+
 class ChatGPT:
     def __init__(self, model="gpt-4o-mini"):
         assert model in config.models["info"], f"Unknown model: {model}"
@@ -67,7 +80,7 @@ class ChatGPT:
                     r = await self._client.chat.completions.create(
                         model=self.model,
                         messages=messages,
-                        **OPENAI_COMPLETION_OPTIONS
+                        **_completion_options(self.model)
                     )
                     answer = r.choices[0].message.content
                 else:
@@ -101,7 +114,7 @@ class ChatGPT:
                         model=self.model,
                         messages=messages,
                         stream=True,
-                        **OPENAI_COMPLETION_OPTIONS
+                        **_completion_options(self.model)
                     )
 
                     answer = ""
@@ -146,7 +159,7 @@ class ChatGPT:
                     r = await self._client.chat.completions.create(
                         model=self.model,
                         messages=messages,
-                        **OPENAI_COMPLETION_OPTIONS
+                        **_completion_options(self.model)
                     )
                     answer = r.choices[0].message.content
                 else:
@@ -196,7 +209,7 @@ class ChatGPT:
                         model=self.model,
                         messages=messages,
                         stream=True,
-                        **OPENAI_COMPLETION_OPTIONS,
+                        **_completion_options(self.model),
                     )
 
                     answer = ""

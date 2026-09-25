@@ -1,4 +1,4 @@
-available_text_models: ["gpt-4o-mini", "openai/gpt-5.5", "gpt-4o", "anthropic/claude-opus-4.8", "anthropic/claude-sonnet-latest", "anthropic/claude-haiku-latest"]
+available_text_models: ["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"]
 
 info:
   gpt-4o:
@@ -29,27 +29,12 @@ info:
       Fast: 5
       Cheap: 5
 
-  openai/gpt-5.5:
+  claude-opus-5:
     type: chat_completion
     provider: openrouter
     vision: true
-    name: GPT-5.5
-    description: GPT-5.5 is OpenAI's latest flagship model — the smartest option for complex reasoning and coding. Routed via <b>OpenRouter</b> (requires openrouter_api_key).
-
-    price_per_1000_input_tokens: 0.005
-    price_per_1000_output_tokens: 0.03
-
-    scores:
-      Smart: 5
-      Fast: 3
-      Cheap: 2
-
-  anthropic/claude-opus-4.8:
-    type: chat_completion
-    provider: openrouter
-    vision: true
-    name: Claude Opus 4.8
-    description: Anthropic's most capable model — top-tier reasoning, coding and long-context work. Routed via <b>OpenRouter</b> (requires openrouter_api_key).
+    name: Claude Opus 5
+    description: Anthropic's most capable model — top-tier reasoning, coding and long-context work. Direct Anthropic API.
 
     price_per_1000_input_tokens: 0.005
     price_per_1000_output_tokens: 0.025
@@ -59,27 +44,27 @@ info:
       Fast: 2
       Cheap: 2
 
-  anthropic/claude-sonnet-latest:
+  claude-sonnet-5:
     type: chat_completion
     provider: openrouter
     vision: true
-    name: Claude Sonnet
-    description: Anthropic's balanced model — strong quality with good speed and price. Routed via <b>OpenRouter</b> (requires openrouter_api_key).
+    name: Claude Sonnet 5
+    description: Anthropic's balanced model — strong quality with good speed and price. Direct Anthropic API.
 
-    price_per_1000_input_tokens: 0.003
-    price_per_1000_output_tokens: 0.015
+    price_per_1000_input_tokens: 0.002
+    price_per_1000_output_tokens: 0.01
 
     scores:
       Smart: 5
       Fast: 4
       Cheap: 3
 
-  anthropic/claude-haiku-latest:
+  claude-haiku-4-5:
     type: chat_completion
     provider: openrouter
     vision: true
-    name: Claude Haiku
-    description: Anthropic's fastest and most affordable model for everyday tasks. Routed via <b>OpenRouter</b> (requires openrouter_api_key).
+    name: Claude Haiku 4.5
+    description: Anthropic's fastest and most affordable model for everyday tasks. Direct Anthropic API.
 
     price_per_1000_input_tokens: 0.001
     price_per_1000_output_tokens: 0.005

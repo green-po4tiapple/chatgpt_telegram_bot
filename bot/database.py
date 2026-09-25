@@ -47,6 +47,8 @@ class Database:
             "current_chat_mode": "assistant",
             "current_model": config.models["available_text_models"][0],
 
+            "show_last_n_on_switch": 3,  # how many recent msg pairs to reprint when switching dialog
+
             "n_used_tokens": {},
 
             "n_generated_images": 0,
@@ -126,3 +128,13 @@ class Database:
             {"_id": dialog_id, "user_id": user_id},
             {"$set": {"messages": dialog_messages}}
         )
+
+    def get_dialogs(self, user_id: int, limit: int = 100):
+        self.check_if_user_exists(user_id, raise_exception=True)
+        dialogs = (
+            self.dialog_collection
+            .find({"user_id": user_id})
+            .sort("start_time", pymongo.DESCENDING)
+            .limit(limit)
+        )
+        return list(dialogs)
