@@ -972,7 +972,7 @@ async def rm_user_handle(update: Update, context: CallbackContext):
             raise
 
 
-DIALOGS_PER_PAGE = 5
+DIALOGS_PER_PAGE = 4
 DEFAULT_SHOW_LAST_N = 3
 LAST_N_OPTIONS = [0, 3, 5, 10]
 
@@ -982,13 +982,7 @@ def _get_show_last_n(user_id: int) -> int:
     return DEFAULT_SHOW_LAST_N if n is None else int(n)
 
 
-def _dialog_label(dialog: dict) -> str:
-    start_time = dialog.get("start_time")
-    dt_str = start_time.strftime("%d.%m %H:%M") if start_time else "?"
-
-    model_key = dialog.get("model", "?")
-    model_name = config.models["info"].get(model_key, {}).get("name", model_key)
-
+def _dialog_snippet(dialog: dict, limit: int = 50) -> str:
     messages = dialog.get("messages", [])
     snippet = ""
     if messages:
@@ -997,10 +991,17 @@ def _dialog_label(dialog: dict) -> str:
         except (KeyError, IndexError, TypeError):
             snippet = ""
     snippet = (snippet or "…").replace("\n", " ").strip()
-    if len(snippet) > 25:
-        snippet = snippet[:25] + "…"
+    if len(snippet) > limit:
+        snippet = snippet[:limit] + "…"
+    return snippet
 
-    return f"{dt_str} · {model_name} · {snippet} ({len(messages)})"
+
+def _dialog_meta(dialog: dict) -> str:
+    start_time = dialog.get("start_time")
+    dt_str = start_time.strftime("%d.%m %H:%M") if start_time else "?"
+    model_key = dialog.get("model", "?")
+    model_name = config.models["info"].get(model_key, {}).get("name", model_key)
+    return f"{dt_str} · {model_name} · {len(dialog.get('messages', []))} msg"
 
 
 def get_dialogs_menu(user_id: int, page_index: int):
@@ -1011,19 +1012,19 @@ def get_dialogs_menu(user_id: int, page_index: int):
     if not dialogs:
         return "You have no dialogs with messages yet.", None
 
-    text = f"Your dialogs ({len(dialogs)}). Tap one to switch context:"
+    text = f"Диалоги ({len(dialogs)}). Верхняя кнопка — открыть чат, нижняя (🗑) — удалить:"
 
     page_dialogs = dialogs[page_index * DIALOGS_PER_PAGE:(page_index + 1) * DIALOGS_PER_PAGE]
 
     keyboard = []
     for dialog in page_dialogs:
-        label = _dialog_label(dialog)
+        # full-width row: leads with the first message so the chat is recognizable
+        switch_label = "💬 " + _dialog_snippet(dialog)
         if dialog["_id"] == current_dialog_id:
-            label = "✅ " + label
-        keyboard.append([
-            InlineKeyboardButton(label, callback_data=f"set_dialog|{dialog['_id']}"),
-            InlineKeyboardButton("🗑", callback_data=f"deldlg|{dialog['_id']}"),
-        ])
+            switch_label = "✅ " + switch_label
+        keyboard.append([InlineKeyboardButton(switch_label, callback_data=f"set_dialog|{dialog['_id']}")])
+        # full-width delete row carries the metadata (date · model · count)
+        keyboard.append([InlineKeyboardButton("🗑 " + _dialog_meta(dialog), callback_data=f"deldlg|{dialog['_id']}")])
 
     # pagination
     if len(dialogs) > DIALOGS_PER_PAGE:
