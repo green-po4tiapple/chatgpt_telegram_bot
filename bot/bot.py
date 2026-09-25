@@ -980,7 +980,10 @@ def get_dialogs_menu(user_id: int, page_index: int):
         label = _dialog_label(dialog)
         if dialog["_id"] == current_dialog_id:
             label = "✅ " + label
-        keyboard.append([InlineKeyboardButton(label, callback_data=f"set_dialog|{dialog['_id']}")])
+        keyboard.append([
+            InlineKeyboardButton(label, callback_data=f"set_dialog|{dialog['_id']}"),
+            InlineKeyboardButton("🗑", callback_data=f"deldlg|{dialog['_id']}"),
+        ])
 
     # pagination
     if len(dialogs) > DIALOGS_PER_PAGE:
@@ -1083,6 +1086,29 @@ async def set_dialog_handle(update: Update, context: CallbackContext):
         await context.bot.send_message(query.message.chat.id, f"👤 {user_text}"[:4000])
         if bot_text:
             await context.bot.send_message(query.message.chat.id, f"🤖 {bot_text}"[:4000])
+
+
+async def del_dialog_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.callback_query, context, update.callback_query.from_user)
+    user_id = update.callback_query.from_user.id
+
+    query = update.callback_query
+    dialog_id = query.data.split("|", 1)[1]
+
+    deleted = db.delete_dialog(user_id, dialog_id)
+
+    # if the active dialog was deleted, open a fresh one so state stays valid
+    if db.get_user_attribute(user_id, "current_dialog_id") == dialog_id:
+        db.start_new_dialog(user_id)
+
+    await query.answer("Удалено" if deleted else "Не найдено")
+
+    text, reply_markup = get_dialogs_menu(user_id, 0)
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    except telegram.error.BadRequest as e:
+        if not str(e).startswith("Message is not modified"):
+            raise
 
 
 async def show_balance_handle(update: Update, context: CallbackContext):
@@ -1214,6 +1240,7 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("chats", show_dialogs_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(show_dialogs_callback_handle, pattern="^show_dialogs"))
     application.add_handler(CallbackQueryHandler(set_dialog_handle, pattern="^set_dialog"))
+    application.add_handler(CallbackQueryHandler(del_dialog_handle, pattern="^deldlg"))
 
     application.add_handler(MessageHandler(filters.VOICE & user_filter, voice_message_handle))
 

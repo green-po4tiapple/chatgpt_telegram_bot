@@ -140,6 +140,11 @@ class Database:
         )
         return list(dialogs)
 
+    def delete_dialog(self, user_id: int, dialog_id: str) -> int:
+        self.check_if_user_exists(user_id, raise_exception=True)
+        res = self.dialog_collection.delete_one({"_id": dialog_id, "user_id": user_id})
+        return res.deleted_count
+
     # ---- runtime allowlist (editable from the bot, stored in DB) ----
     def get_extra_allowed(self) -> list:
         doc = self.settings_collection.find_one({"_id": "allowlist"})
