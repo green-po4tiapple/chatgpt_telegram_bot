@@ -482,7 +482,9 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
     async with user_semaphores[user_id]:
         model_supports_vision = config.models["info"][current_model].get("vision", False)
         photo_sent = update.message.photo is not None and len(update.message.photo) > 0
-        if model_supports_vision or photo_sent:
+        # only take the vision path when a photo was actually sent — otherwise text
+        # (incl. transcribed voice) wrongly hit effective_attachment[-1] and crashed
+        if photo_sent:
             if not model_supports_vision:
                 # a photo was sent but the selected model can't read images:
                 # fall back to a vision-capable default
