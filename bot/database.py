@@ -14,6 +14,7 @@ class Database:
 
         self.user_collection = self.db["user"]
         self.dialog_collection = self.db["dialog"]
+        self.settings_collection = self.db["settings"]
 
     def check_if_user_exists(self, user_id: int, raise_exception: bool = False):
         if self.user_collection.count_documents({"_id": user_id}) > 0:
@@ -138,3 +139,24 @@ class Database:
             .limit(limit)
         )
         return list(dialogs)
+
+    # ---- runtime allowlist (editable from the bot, stored in DB) ----
+    def get_extra_allowed(self) -> list:
+        doc = self.settings_collection.find_one({"_id": "allowlist"})
+        return doc["users"] if doc and "users" in doc else []
+
+    def add_allowed(self, entry) -> list:
+        users = self.get_extra_allowed()
+        if entry not in users:
+            users.append(entry)
+            self.settings_collection.update_one(
+                {"_id": "allowlist"}, {"$set": {"users": users}}, upsert=True
+            )
+        return users
+
+    def remove_allowed(self, entry) -> list:
+        users = [u for u in self.get_extra_allowed() if u != entry]
+        self.settings_collection.update_one(
+            {"_id": "allowlist"}, {"$set": {"users": users}}, upsert=True
+        )
+        return users

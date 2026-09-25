@@ -23,6 +23,8 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     AIORateLimiter,
+    TypeHandler,
+    ApplicationHandlerStop,
     filters
 )
 from telegram.constants import ParseMode, ChatAction
@@ -359,6 +361,20 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
     if await is_previous_message_not_answered_yet(update, context): return
 
     user_id = update.message.from_user.id
+
+    # admin flow: capturing a username/id to add to the allowlist
+    if context.user_data.get("awaiting_user_add") and _is_admin(update.message.from_user):
+        context.user_data["awaiting_user_add"] = False
+        raw = (_message or "").strip()
+        if not raw:
+            await update.message.reply_text("Empty input, nothing added.")
+            return
+        entry = int(raw) if raw.lstrip("-").isdigit() else _norm_entry(raw)
+        db.add_allowed(entry)
+        disp = ("@" + entry) if isinstance(entry, str) else str(entry)
+        await update.message.reply_text(f"✅ Added to allowlist: {disp}")
+        return
+
     chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
 
     if chat_mode == "artist":
@@ -586,6 +602,8 @@ async def cancel_handle(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
 
+    context.user_data["awaiting_user_add"] = False
+
     if user_id in user_tasks:
         task = user_tasks[user_id]
         task.cancel()
@@ -707,9 +725,10 @@ def get_settings_menu(user_id: int):
 
     keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
 
-    # "recent messages to reprint on dialog switch" selector
+    # dialog-switch history selector. Telegram can't put text between keyboard
+    # rows, so a header-row button labels the option group below it.
     current_n = _get_show_last_n(user_id)
-    text += "\n\nOn <b>/chats</b> switch, reprint last messages:"
+    keyboard.append([InlineKeyboardButton("— 📜 Reprint history on /chats switch —", callback_data="settings_noop")])
     n_buttons = []
     for n in LAST_N_OPTIONS:
         title = "Off" if n == 0 else str(n)
@@ -771,6 +790,130 @@ async def set_show_last_n_handle(update: Update, context: CallbackContext):
     except telegram.error.BadRequest as e:
         if str(e).startswith("Message is not modified"):
             pass
+
+
+async def settings_noop_handle(update: Update, context: CallbackContext):
+    # header/label button in menus — does nothing but must answer the callback
+    await update.callback_query.answer()
+
+
+# ---------- access control (runtime allowlist) ----------
+
+def _norm_entry(entry):
+    return entry.lstrip("@").lower() if isinstance(entry, str) else entry
+
+
+def _config_allow_entries():
+    return [_norm_entry(x) for x in config.allowed_telegram_usernames]
+
+
+def _is_admin(user) -> bool:
+    # admins = entries from config (env-seeded owners); they manage the allowlist
+    if user is None:
+        return False
+    entries = _config_allow_entries()
+    if user.id in entries:
+        return True
+    if user.username and _norm_entry(user.username) in entries:
+        return True
+    return False
+
+
+def _is_allowed(user) -> bool:
+    if user is None:
+        return False
+    if _is_admin(user):
+        return True
+    entries = [_norm_entry(x) for x in db.get_extra_allowed()]
+    if user.id in entries:
+        return True
+    if user.username and _norm_entry(user.username) in entries:
+        return True
+    return False
+
+
+async def access_gate(update: Update, context: CallbackContext):
+    # preserve upstream behavior: empty allowlist everywhere => open to all
+    if len(config.allowed_telegram_usernames) == 0 and len(db.get_extra_allowed()) == 0:
+        return
+
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if user is not None and _is_allowed(user):
+        return
+
+    group_ids = [x for x in config.allowed_telegram_usernames if isinstance(x, int) and x < 0]
+    if chat is not None and chat.id in group_ids:
+        return
+
+    try:
+        if update.effective_message is not None:
+            await update.effective_message.reply_text("⛔ You don't have access to this bot.")
+        elif update.callback_query is not None:
+            await update.callback_query.answer("No access", show_alert=True)
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+
+
+def get_users_menu():
+    text = "<b>Access control</b>\n\n"
+    text += "Owners (from config, fixed):\n"
+    for e in config.allowed_telegram_usernames:
+        text += f"  🔒 {e}\n"
+
+    extra = db.get_extra_allowed()
+    text += "\nAdded users:\n"
+    if not extra:
+        text += "  (none)\n"
+
+    keyboard = []
+    for e in extra:
+        disp = ("@" + e) if isinstance(e, str) else str(e)
+        keyboard.append([InlineKeyboardButton(f"❌ {disp}", callback_data=f"rmuser|{e}")])
+    keyboard.append([InlineKeyboardButton("➕ Add user", callback_data="adduser")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def users_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    if not _is_admin(update.message.from_user):
+        await update.message.reply_text("⛔ Admins only.")
+        return
+    db.set_user_attribute(update.message.from_user.id, "last_interaction", datetime.now())
+    text, reply_markup = get_users_menu()
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def add_user_handle(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    if not _is_admin(query.from_user):
+        return
+    context.user_data["awaiting_user_add"] = True
+    await context.bot.send_message(
+        query.message.chat.id,
+        "Send <b>@username</b> or numeric <b>user id</b> to allow. /cancel to abort.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def rm_user_handle(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    if not _is_admin(query.from_user):
+        return
+    raw = query.data.split("|", 1)[1]
+    entry = int(raw) if raw.lstrip("-").isdigit() else raw
+    db.remove_allowed(entry)
+    text, reply_markup = get_users_menu()
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    except telegram.error.BadRequest as e:
+        if not str(e).startswith("Message is not modified"):
+            raise
 
 
 DIALOGS_PER_PAGE = 5
@@ -1017,6 +1160,7 @@ async def post_init(application: Application):
         BotCommand("/retry", "Re-generate response for previous query"),
         BotCommand("/balance", "Show balance"),
         BotCommand("/settings", "Show settings"),
+        BotCommand("/users", "Manage allowed users (admin)"),
         BotCommand("/help", "Show help message"),
     ])
 
@@ -1033,13 +1177,10 @@ def run_bot() -> None:
     )
 
     # add handlers
+    # access control is dynamic (runtime allowlist in DB) via a pre-gate,
+    # so downstream handlers accept all updates and the gate drops disallowed ones
     user_filter = filters.ALL
-    if len(config.allowed_telegram_usernames) > 0:
-        usernames = [x for x in config.allowed_telegram_usernames if isinstance(x, str)]
-        any_ids = [x for x in config.allowed_telegram_usernames if isinstance(x, int)]
-        user_ids = [x for x in any_ids if x > 0]
-        group_ids = [x for x in any_ids if x < 0]
-        user_filter = filters.User(username=usernames) | filters.User(user_id=user_ids) | filters.Chat(chat_id=group_ids)
+    application.add_handler(TypeHandler(Update, access_gate), group=-1)
 
     application.add_handler(CommandHandler("start", start_handle, filters=user_filter))
     application.add_handler(CommandHandler("help", help_handle, filters=user_filter))
@@ -1066,6 +1207,11 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("settings", settings_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(set_settings_handle, pattern="^set_settings"))
     application.add_handler(CallbackQueryHandler(set_show_last_n_handle, pattern="^set_lastn"))
+    application.add_handler(CallbackQueryHandler(settings_noop_handle, pattern="^settings_noop$"))
+
+    application.add_handler(CommandHandler("users", users_handle, filters=user_filter))
+    application.add_handler(CallbackQueryHandler(add_user_handle, pattern="^adduser$"))
+    application.add_handler(CallbackQueryHandler(rm_user_handle, pattern="^rmuser"))
 
     application.add_handler(CommandHandler("balance", show_balance_handle, filters=user_filter))
 
