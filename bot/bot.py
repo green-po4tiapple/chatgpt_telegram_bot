@@ -848,14 +848,53 @@ def _is_allowed(user) -> bool:
     return False
 
 
+def _is_bot_invocation(update: Update, context: CallbackContext) -> bool:
+    # is this update actually directed at the bot?
+    if update.callback_query is not None:
+        return True  # tapping an inline button on the bot's own message
+
+    msg = update.effective_message
+    chat = update.effective_chat
+    if msg is None or chat is None:
+        return False
+
+    if chat.type == "private":
+        return True  # every private message is addressed to the bot
+
+    # group / supergroup: only @mention, reply-to-bot, or a command for this bot
+    text = msg.text or msg.caption or ""
+    bot_username = context.bot.username
+
+    entities = list(msg.entities or []) + list(msg.caption_entities or [])
+    for ent in entities:
+        if ent.type == "bot_command" and ent.offset == 0:
+            cmd = text[ent.offset: ent.offset + ent.length]
+            if "@" not in cmd or cmd.endswith("@" + (bot_username or "")):
+                return True
+
+    if bot_username and ("@" + bot_username) in text:
+        return True
+
+    reply = msg.reply_to_message
+    if reply is not None and reply.from_user is not None and reply.from_user.id == context.bot.id:
+        return True
+
+    return False
+
+
 async def access_gate(update: Update, context: CallbackContext):
-    # preserve upstream behavior: empty allowlist everywhere => open to all
+    # 1) in groups, ignore anything not addressed to the bot (no @tag / reply / command)
+    if not _is_bot_invocation(update, context):
+        raise ApplicationHandlerStop
+
+    # empty allowlist everywhere => open to all (upstream behavior)
     if len(config.allowed_telegram_usernames) == 0 and len(db.get_extra_allowed()) == 0:
         return
 
     user = update.effective_user
     chat = update.effective_chat
 
+    # 2) the bot was invoked — check access
     if user is not None and _is_allowed(user):
         return
 
@@ -863,11 +902,12 @@ async def access_gate(update: Update, context: CallbackContext):
     if chat is not None and chat.id in group_ids:
         return
 
+    # invoked but no rights — tell the user, then stop
     try:
-        if update.effective_message is not None:
-            await update.effective_message.reply_text("⛔ You don't have access to this bot.")
-        elif update.callback_query is not None:
-            await update.callback_query.answer("No access", show_alert=True)
+        if update.callback_query is not None:
+            await update.callback_query.answer("Нет доступа", show_alert=True)
+        elif update.effective_message is not None:
+            await update.effective_message.reply_text("⛔ У вас нет доступа к этому боту.")
     except Exception:
         pass
     raise ApplicationHandlerStop
