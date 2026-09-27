@@ -848,6 +848,12 @@ def _is_allowed(user) -> bool:
     return False
 
 
+OUR_COMMANDS = {
+    "start", "help", "help_group_chat", "retry", "new", "cancel",
+    "chats", "imagine", "mode", "settings", "users", "balance",
+}
+
+
 def _is_bot_invocation(update: Update, context: CallbackContext) -> bool:
     # is this update actually directed at the bot?
     if update.callback_query is not None:
@@ -868,8 +874,14 @@ def _is_bot_invocation(update: Update, context: CallbackContext) -> bool:
     entities = list(msg.entities or []) + list(msg.caption_entities or [])
     for ent in entities:
         if ent.type == "bot_command" and ent.offset == 0:
-            cmd = text[ent.offset: ent.offset + ent.length]
-            if "@" not in cmd or cmd.endswith("@" + (bot_username or "")):
+            cmd = text[ent.offset + 1: ent.offset + ent.length]  # drop leading "/"
+            name, sep, at_bot = cmd.partition("@")
+            if sep:
+                # "/cmd@bot" — only if explicitly addressed to us
+                if at_bot == (bot_username or ""):
+                    return True
+            elif name.lower() in OUR_COMMANDS:
+                # bare "/cmd" — only our own commands (ignore other bots' commands)
                 return True
 
     if bot_username and ("@" + bot_username) in text:
